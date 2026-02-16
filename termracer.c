@@ -8,10 +8,13 @@
 
 // 3D向量结构
 typedef struct { double x, y, z; } Vec3;
+
 // 4x4矩阵结构（列优先）
 typedef struct { double m[4][4]; } Matrix;
+
 // 投影矩阵参数
 typedef struct { double l, r, b, t, n, f; } Frustum;
+
 // 赛道点结构
 typedef struct { Vec3 center; Vec3 left; Vec3 right; } TrackSegment;
 
@@ -25,7 +28,8 @@ Vec3 vec3_normalize(Vec3 v) { double len = sqrt(vec3_dot(v, v)); if (len < 1e-6)
 
 // ==================== 矩阵运算 ====================
 Vec3 transform_point(const Vec3* v, const Matrix* mat) {
-    Vec3 res; double w = mat->m[3][0] * v->x + mat->m[3][1] * v->y + mat->m[3][2] * v->z + mat->m[3][3];
+    Vec3 res;
+    double w = mat->m[3][0] * v->x + mat->m[3][1] * v->y + mat->m[3][2] * v->z + mat->m[3][3];
     if (fabs(w) > 1e-6) {
         res.x = (mat->m[0][0] * v->x + mat->m[0][1] * v->y + mat->m[0][2] * v->z + mat->m[0][3]) / w;
         res.y = (mat->m[1][0] * v->x + mat->m[1][1] * v->y + mat->m[1][2] * v->z + mat->m[1][3]) / w;
@@ -46,10 +50,14 @@ Matrix matrix_multiply(const Matrix* a, const Matrix* b) {
 Matrix projection_matrix(const Frustum* frust) {
     Matrix mat = {0};
     double rl = frust->r - frust->l, tb = frust->t - frust->b, fn = frust->f - frust->n;
-    mat.m[0][0] = 2 * frust->n / rl; mat.m[0][2] = (frust->r + frust->l) / rl;
-    mat.m[1][1] = 2 * frust->n / tb; mat.m[1][2] = (frust->t + frust->b) / tb;
-    mat.m[2][2] = -(frust->f + frust->n) / fn; mat.m[2][3] = -2 * frust->f * frust->n / fn;
-    mat.m[3][2] = -1; return mat;
+    mat.m[0][0] = 2 * frust->n / rl;
+    mat.m[0][2] = (frust->r + frust->l) / rl;
+    mat.m[1][1] = 2 * frust->n / tb;
+    mat.m[1][2] = (frust->t + frust->b) / tb;
+    mat.m[2][2] = -(frust->f + frust->n) / fn;
+    mat.m[2][3] = -2 * frust->f * frust->n / fn;
+    mat.m[3][2] = -1;
+    return mat;
 }
 
 Matrix look_at_matrix(Vec3 eye, Vec3 target, Vec3 up) {
@@ -60,7 +68,8 @@ Matrix look_at_matrix(Vec3 eye, Vec3 target, Vec3 up) {
     mat.m[0][0] = x.x; mat.m[0][1] = x.y; mat.m[0][2] = x.z; mat.m[0][3] = -vec3_dot(x, eye);
     mat.m[1][0] = y.x; mat.m[1][1] = y.y; mat.m[1][2] = y.z; mat.m[1][3] = -vec3_dot(y, eye);
     mat.m[2][0] = z.x; mat.m[2][1] = z.y; mat.m[2][2] = z.z; mat.m[2][3] = -vec3_dot(z, eye);
-    mat.m[3][3] = 1; return mat;
+    mat.m[3][3] = 1;
+    return mat;
 }
 
 // ==================== 赛道生成 ====================
@@ -71,7 +80,8 @@ TrackSegment* generate_track(int num_segments, double track_width) {
         if (i % 10 == 0) angle += (rand() % 100 - 50) / 500.0;
         y += (rand() % 200 - 100) / 500.0;
         if (y < -1) y = -1; if (y > 1) y = 1;
-        x += step * sin(angle); z += step * cos(angle);
+        x += step * sin(angle);
+        z += step * cos(angle);
         track[i].center = (Vec3){x, y, z};
         Vec3 dir = {sin(angle), 0, cos(angle)};
         Vec3 left_dir = {cos(angle), 0, -sin(angle)};
@@ -85,7 +95,8 @@ TrackSegment* generate_track(int num_segments, double track_width) {
 int project_point(const Vec3* world, const Matrix* vp, int* sx, int* sy) {
     Vec3 clip = transform_point(world, vp);
     if (clip.z < -1 || clip.z > 1 || clip.x < -1 || clip.x > 1 || clip.y < -1 || clip.y > 1) return 0;
-    int max_y, max_x; getmaxyx(stdscr, max_y, max_x);
+    int max_y, max_x;
+    getmaxyx(stdscr, max_y, max_x);
     *sx = (int)((clip.x + 1) * 0.5 * (max_x - 1));
     *sy = (int)((1 - (clip.y + 1) * 0.5) * (max_y - 1));
     return 1;
@@ -104,85 +115,44 @@ void draw_line(const Vec3* a, const Vec3* b, const Matrix* vp, char ch) {
     }
 }
 
-// ==================== 游戏状态 & Kitty 协议处理 ====================
+// ==================== 游戏状态 ====================
 typedef struct { Vec3 position; double yaw; double speed; } Car;
 
-// 按键状态
-typedef enum { KEY_STATE_RELEASED, KEY_STATE_PRESSED } KeyState;
-KeyState key_w = KEY_STATE_RELEASED;
-KeyState key_s = KEY_STATE_RELEASED;
-KeyState key_a = KEY_STATE_RELEASED;
-KeyState key_d = KEY_STATE_RELEASED;
-
-double get_time() { struct timeval tv; gettimeofday(&tv, NULL); return tv.tv_sec + tv.tv_usec / 1000000.0; }
-
-// Kitty协议解析函数
-void handle_kitty_input(const char *buf, int len) {
-    // 寻找CSI序列: \x1b[
-    for (int i = 0; i < len - 1; i++) {
-        if (buf[i] == 0x1b && buf[i+1] == '[') {
-            // 提取参数，格式: 键码;修饰符;事件类型 u
-            int keycode = 0, mods = 0, event = 0;
-            char *endptr;
-            // 简单解析: 从 \x1b[ 后开始
-            const char *ptr = buf + i + 2;
-            keycode = strtol(ptr, &endptr, 10);
-            if (endptr && *endptr == ';') {
-                ptr = endptr + 1;
-                mods = strtol(ptr, &endptr, 10);
-                if (endptr && *endptr == ';') {
-                    ptr = endptr + 1;
-                    event = strtol(ptr, &endptr, 10);
-                    if (endptr && *endptr == 'u') {
-                        // 成功解析Kitty事件
-                        // 将键码映射到游戏按键 (这里以字母键为例)
-                        if (keycode == 'w' || keycode == 'W') {
-                            key_w = (event == 1 || event == 2) ? KEY_STATE_PRESSED : KEY_STATE_RELEASED; // press/repeat视为按下
-                        } else if (keycode == 's' || keycode == 'S') {
-                            key_s = (event == 1 || event == 2) ? KEY_STATE_PRESSED : KEY_STATE_RELEASED;
-                        } else if (keycode == 'a' || keycode == 'A') {
-                            key_a = (event == 1 || event == 2) ? KEY_STATE_PRESSED : KEY_STATE_RELEASED;
-                        } else if (keycode == 'd' || keycode == 'D') {
-                            key_d = (event == 1 || event == 2) ? KEY_STATE_PRESSED : KEY_STATE_RELEASED;
-                        } else if (keycode == 'q' || keycode == 'Q') {
-                            // 处理退出键，这里只处理按下事件以避免重复退出
-                            if (event == 1) {
-                                // 设置退出标志，这里简单处理，需要从主循环访问，所以先跳过，在主循环处理q键
-                            }
-                        }
-                        // 忽略其他键
-                    }
-                }
-            }
-        }
-    }
+double get_time() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
 int main() {
     initscr(); cbreak(); noecho(); keypad(stdscr, TRUE); nodelay(stdscr, TRUE); curs_set(0);
     srand(time(NULL));
 
-    // 启用Kitty键盘协议
-    printf("\x1b[>1u"); // 启用协议 [citation:1]
-    fflush(stdout);
-
     int num_segments = 800;
     double track_width = 3.0;
     TrackSegment* track = generate_track(num_segments, track_width);
 
-    int max_y, max_x; getmaxyx(stdscr, max_y, max_x);
+    int max_y, max_x;
+    getmaxyx(stdscr, max_y, max_x);
     double aspect = (double)max_x / max_y;
     Frustum frust = { -aspect * 0.4, aspect * 0.4, -0.3, 0.3, 0.5, 200.0 };
     Matrix proj = projection_matrix(&frust);
 
     Car car = { {0, 0.5, 0}, 0, 0 };
 
-    const double ACCELERATION = 5.0;
-    const double TURN_SPEED = 1.0;
-    const double MAX_SPEED = 15.0;
-    const double FRICTION = 1.2;
+    // 控制参数
+    const double ACCELERATION = 6.0;      // 加速度 m/s²
+    const double TURN_SPEED = 0.9;        // 转向速度 rad/s
+    const double MAX_SPEED = 16.0;
+    const double FRICTION = 1.2;          // 摩擦减速度 m/s²
+    const double KEY_HOLD_TIME = 0.1;      // 转向键保持时间(秒)
+
+    // 油门状态（切换模式）
+    int accel_fwd_on = 0;   // 前进油门开启
+    int accel_bwd_on = 0;   // 倒车油门开启
 
     double last_time = get_time();
+    double last_a_time = -KEY_HOLD_TIME, last_d_time = -KEY_HOLD_TIME;
     int running = 1;
 
     while (running) {
@@ -191,39 +161,32 @@ int main() {
         last_time = current_time;
         if (delta_time > 0.1) delta_time = 0.1;
 
-        // 读取所有输入
+        // 读取所有输入，更新转向保持时间及油门切换
         int ch;
-        char input_buf[256];
-        int pos = 0;
-        while ((ch = getch()) != ERR && pos < 255) {
-            input_buf[pos++] = ch;
-        }
-        if (pos > 0) {
-            input_buf[pos] = '\0';
-            // 检查是否是Kitty协议序列 (以ESC开头)
-            if (input_buf[0] == 0x1b) {
-                handle_kitty_input(input_buf, pos);
-            } else {
-                // 处理普通字符（作为后备）
-                for (int i = 0; i < pos; i++) {
-                    switch (input_buf[i]) {
-                        case 'w': key_w = KEY_STATE_PRESSED; break;
-                        case 's': key_s = KEY_STATE_PRESSED; break;
-                        case 'a': key_a = KEY_STATE_PRESSED; break;
-                        case 'd': key_d = KEY_STATE_PRESSED; break;
-                        case 'q': running = 0; break;
-                    }
-                }
+        while ((ch = getch()) != ERR) {
+            switch (ch) {
+                case 'w':
+                    accel_fwd_on = !accel_fwd_on;
+                    if (accel_fwd_on) accel_bwd_on = 0; // 互斥
+                    break;
+                case 's':
+                    accel_bwd_on = !accel_bwd_on;
+                    if (accel_bwd_on) accel_fwd_on = 0;
+                    break;
+                case 'a': last_a_time = current_time; break;
+                case 'd': last_d_time = current_time; break;
+                case 'q': running = 0; break;
             }
         }
 
-        // 根据按键状态更新速度和转向
+        // 速度计算
         double target_speed = car.speed;
-        if (key_w == KEY_STATE_PRESSED) {
+        if (accel_fwd_on) {
             target_speed = car.speed + ACCELERATION * delta_time;
-        } else if (key_s == KEY_STATE_PRESSED) {
+        } else if (accel_bwd_on) {
             target_speed = car.speed - ACCELERATION * delta_time;
         } else {
+            // 无油门，摩擦减速
             if (car.speed > 0) {
                 target_speed = car.speed - FRICTION * delta_time;
                 if (target_speed < 0) target_speed = 0;
@@ -236,10 +199,13 @@ int main() {
         if (target_speed < -MAX_SPEED/2) target_speed = -MAX_SPEED/2;
         car.speed = target_speed;
 
+        // 转向判断（基于保持时间）
+        int turn_left = (current_time - last_a_time) < KEY_HOLD_TIME;
+        int turn_right = (current_time - last_d_time) < KEY_HOLD_TIME;
         double turn = 0.0;
-        if (key_a == KEY_STATE_PRESSED) turn = TURN_SPEED * delta_time;
-        if (key_d == KEY_STATE_PRESSED) turn = -TURN_SPEED * delta_time;
-        double turn_factor = 1.0 / (1.0 + fabs(car.speed) * 0.2);
+        if (turn_left) turn = TURN_SPEED * delta_time;
+        if (turn_right) turn = -TURN_SPEED * delta_time;
+        double turn_factor = 1.0 / (1.0 + fabs(car.speed) * 0.15); // 速度影响转向灵敏度
         car.yaw += turn * turn_factor;
 
         // 更新位置
@@ -270,22 +236,18 @@ int main() {
         int sx, sy;
         if (project_point(&car.position, &vp, &sx, &sy)) mvaddch(sy, sx, '@');
 
-        // 显示FPS和状态
+        // 显示状态
         double fps = 1.0 / delta_time;
-        mvprintw(0, 0, "FPS: %.1f | Speed: %.2f m/s | Yaw: %.2f rad | W:%s S:%s A:%s D:%s",
-                 fps, car.speed, car.yaw,
-                 key_w == KEY_STATE_PRESSED ? "1" : "0",
-                 key_s == KEY_STATE_PRESSED ? "1" : "0",
-                 key_a == KEY_STATE_PRESSED ? "1" : "0",
-                 key_d == KEY_STATE_PRESSED ? "1" : "0");
+        const char* throttle_state = "N";
+        if (accel_fwd_on) throttle_state = "FWD";
+        else if (accel_bwd_on) throttle_state = "REV";
+        mvprintw(0, 0, "FPS: %.1f | Throttle: %s | Speed: %.2f m/s | Yaw: %.2f rad",
+                 fps, throttle_state, car.speed, car.yaw);
+        mvprintw(1, 0, "W: toggle forward, S: toggle reverse, A/D: hold to turn, Q: quit");
 
         refresh();
         usleep(15000);
     }
-
-    // 恢复终端键盘模式
-    printf("\x1b[<u");
-    fflush(stdout);
 
     free(track);
     endwin();
