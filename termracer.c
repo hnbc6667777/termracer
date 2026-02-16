@@ -20,7 +20,7 @@
 #define TRACK_WIDTH        6.0     // 赛道半宽 (实际宽度为 2*TRACK_WIDTH)
 #define SEGMENT_STEP        2.0     // 每段前进距离
 #define HEIGHT_VARIATION    1     // 高度变化幅度 (±0.2)
-#define TURN_VARIATION      0.1     // 方向变化幅度 (±0.1 rad)
+#define TURN_VARIATION      1     // 方向变化幅度 (±0.1 rad)
 
 // 投影矩阵（视锥体）
 #define FRUSTUM_L_FACTOR    0.4     // left = -aspect * FRUSTUM_L_FACTOR
