@@ -6,16 +6,39 @@
 #include <time.h>
 #include <sys/time.h>
 
-// 3D向量结构
+// ==================== 宏定义（可调参数） ====================
+// 游戏控制
+#define ACCELERATION       6.0     // 加速度 (m/s²)
+#define TURN_SPEED          0.9     // 转向速度 (rad/s)
+#define MAX_SPEED          16.0     // 最大前进速度 (m/s)
+#define MAX_REV_SPEED       8.0     // 最大倒车速度 (m/s)
+#define FRICTION            1.2     // 摩擦减速度 (m/s²)
+#define KEY_HOLD_TIME       0.1     // 转向键保持判定时间 (秒)
+
+// 赛道生成
+#define NUM_SEGMENTS      800      // 赛道总段数
+#define TRACK_WIDTH        3.0     // 赛道半宽 (实际宽度为 2*TRACK_WIDTH)
+#define SEGMENT_STEP        2.0     // 每段前进距离
+#define HEIGHT_VARIATION    0.4     // 高度变化幅度 (±0.2)
+#define TURN_VARIATION      0.1     // 方向变化幅度 (±0.1 rad)
+
+// 投影矩阵（视锥体）
+#define FRUSTUM_L_FACTOR    0.4     // left = -aspect * FRUSTUM_L_FACTOR
+#define FRUSTUM_R_FACTOR    0.4     // right = aspect * FRUSTUM_R_FACTOR
+#define FRUSTUM_B          -0.3     // bottom
+#define FRUSTUM_T           0.3     // top
+#define FRUSTUM_N           0.5     // near
+#define FRUSTUM_F         200.0     // far
+
+// 相机参数
+#define CAMERA_DIST         2.5     // 相机在车后的距离
+#define CAMERA_HEIGHT       2.0     // 相机高度
+#define TARGET_DIST         6.0     // 相机注视点超前距离
+
+// ==================== 数据结构 ====================
 typedef struct { double x, y, z; } Vec3;
-
-// 4x4矩阵结构（列优先）
 typedef struct { double m[4][4]; } Matrix;
-
-// 投影矩阵参数
 typedef struct { double l, r, b, t, n, f; } Frustum;
-
-// 赛道点结构
 typedef struct { Vec3 center; Vec3 left; Vec3 right; } TrackSegment;
 
 // ==================== 向量运算 ====================
@@ -75,13 +98,13 @@ Matrix look_at_matrix(Vec3 eye, Vec3 target, Vec3 up) {
 // ==================== 赛道生成 ====================
 TrackSegment* generate_track(int num_segments, double track_width) {
     TrackSegment* track = malloc(num_segments * sizeof(TrackSegment));
-    double z = 0, y = 0, x = 0, angle = 0, step = 2.0;
+    double z = 0, y = 0, x = 0, angle = 0;
     for (int i = 0; i < num_segments; i++) {
-        if (i % 10 == 0) angle += (rand() % 100 - 50) / 500.0;
-        y += (rand() % 200 - 100) / 500.0;
+        if (i % 10 == 0) angle += ((rand() % 200) - 100) / 1000.0 * TURN_VARIATION * 10; // 随机转向
+        y += ((rand() % 200) - 100) / 500.0 * HEIGHT_VARIATION; // 高度变化
         if (y < -1) y = -1; if (y > 1) y = 1;
-        x += step * sin(angle);
-        z += step * cos(angle);
+        x += SEGMENT_STEP * sin(angle);
+        z += SEGMENT_STEP * cos(angle);
         track[i].center = (Vec3){x, y, z};
         Vec3 dir = {sin(angle), 0, cos(angle)};
         Vec3 left_dir = {cos(angle), 0, -sin(angle)};
@@ -128,28 +151,18 @@ int main() {
     initscr(); cbreak(); noecho(); keypad(stdscr, TRUE); nodelay(stdscr, TRUE); curs_set(0);
     srand(time(NULL));
 
-    int num_segments = 800;
-    double track_width = 3.0;
-    TrackSegment* track = generate_track(num_segments, track_width);
+    TrackSegment* track = generate_track(NUM_SEGMENTS, TRACK_WIDTH);
 
     int max_y, max_x;
     getmaxyx(stdscr, max_y, max_x);
     double aspect = (double)max_x / max_y;
-    Frustum frust = { -aspect * 0.4, aspect * 0.4, -0.3, 0.3, 0.5, 200.0 };
+    Frustum frust = { -aspect * FRUSTUM_L_FACTOR, aspect * FRUSTUM_R_FACTOR, FRUSTUM_B, FRUSTUM_T, FRUSTUM_N, FRUSTUM_F };
     Matrix proj = projection_matrix(&frust);
 
     Car car = { {0, 0.5, 0}, 0, 0 };
 
-    // 控制参数
-    const double ACCELERATION = 6.0;      // 加速度 m/s²
-    const double TURN_SPEED = 0.9;        // 转向速度 rad/s
-    const double MAX_SPEED = 16.0;
-    const double FRICTION = 1.2;          // 摩擦减速度 m/s²
-    const double KEY_HOLD_TIME = 0.1;      // 转向键保持时间(秒)
-
-    // 油门状态（切换模式）
-    int accel_fwd_on = 0;   // 前进油门开启
-    int accel_bwd_on = 0;   // 倒车油门开启
+    int accel_fwd_on = 0;
+    int accel_bwd_on = 0;
 
     double last_time = get_time();
     double last_a_time = -KEY_HOLD_TIME, last_d_time = -KEY_HOLD_TIME;
@@ -161,13 +174,12 @@ int main() {
         last_time = current_time;
         if (delta_time > 0.1) delta_time = 0.1;
 
-        // 读取所有输入，更新转向保持时间及油门切换
         int ch;
         while ((ch = getch()) != ERR) {
             switch (ch) {
                 case 'w':
                     accel_fwd_on = !accel_fwd_on;
-                    if (accel_fwd_on) accel_bwd_on = 0; // 互斥
+                    if (accel_fwd_on) accel_bwd_on = 0;
                     break;
                 case 's':
                     accel_bwd_on = !accel_bwd_on;
@@ -186,7 +198,6 @@ int main() {
         } else if (accel_bwd_on) {
             target_speed = car.speed - ACCELERATION * delta_time;
         } else {
-            // 无油门，摩擦减速
             if (car.speed > 0) {
                 target_speed = car.speed - FRICTION * delta_time;
                 if (target_speed < 0) target_speed = 0;
@@ -196,28 +207,28 @@ int main() {
             }
         }
         if (target_speed > MAX_SPEED) target_speed = MAX_SPEED;
-        if (target_speed < -MAX_SPEED/2) target_speed = -MAX_SPEED/2;
+        if (target_speed < -MAX_REV_SPEED) target_speed = -MAX_REV_SPEED;
         car.speed = target_speed;
 
-        // 转向判断（基于保持时间）
+        // 转向
         int turn_left = (current_time - last_a_time) < KEY_HOLD_TIME;
         int turn_right = (current_time - last_d_time) < KEY_HOLD_TIME;
         double turn = 0.0;
         if (turn_left) turn = TURN_SPEED * delta_time;
         if (turn_right) turn = -TURN_SPEED * delta_time;
-        double turn_factor = 1.0 / (1.0 + fabs(car.speed) * 0.15); // 速度影响转向灵敏度
+        double turn_factor = 1.0 / (1.0 + fabs(car.speed) * 0.15);
         car.yaw += turn * turn_factor;
 
         // 更新位置
         car.position.x += car.speed * delta_time * sin(car.yaw);
         car.position.z += car.speed * delta_time * cos(car.yaw);
-        int nearest = (int)(car.position.z / 2.0);
-        if (nearest >= 0 && nearest < num_segments)
+        int nearest = (int)(car.position.z / SEGMENT_STEP);
+        if (nearest >= 0 && nearest < NUM_SEGMENTS)
             car.position.y = track[nearest].center.y + 0.3;
 
-        // 相机设置
-        Vec3 eye = { car.position.x - 2.5 * sin(car.yaw), car.position.y + 2.0, car.position.z - 2.5 * cos(car.yaw) };
-        Vec3 target = { car.position.x + 6 * sin(car.yaw), car.position.y, car.position.z + 6 * cos(car.yaw) };
+        // 相机
+        Vec3 eye = { car.position.x - CAMERA_DIST * sin(car.yaw), car.position.y + CAMERA_HEIGHT, car.position.z - CAMERA_DIST * cos(car.yaw) };
+        Vec3 target = { car.position.x + TARGET_DIST * sin(car.yaw), car.position.y, car.position.z + TARGET_DIST * cos(car.yaw) };
         Vec3 up = {0, 1, 0};
         Matrix view = look_at_matrix(eye, target, up);
         Matrix vp = matrix_multiply(&proj, &view);
@@ -225,18 +236,16 @@ int main() {
         erase();
 
         // 绘制赛道
-        for (int i = 1; i < num_segments; i++) {
+        for (int i = 1; i < NUM_SEGMENTS; i++) {
             draw_line(&track[i-1].center, &track[i].center, &vp, '.');
             draw_line(&track[i-1].left, &track[i].left, &vp, '#');
             draw_line(&track[i-1].right, &track[i].right, &vp, '#');
             if (i % 5 == 0) draw_line(&track[i].left, &track[i].right, &vp, '-');
         }
 
-        // 绘制赛车
         int sx, sy;
         if (project_point(&car.position, &vp, &sx, &sy)) mvaddch(sy, sx, '@');
 
-        // 显示状态
         double fps = 1.0 / delta_time;
         const char* throttle_state = "N";
         if (accel_fwd_on) throttle_state = "FWD";
