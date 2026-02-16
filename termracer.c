@@ -17,9 +17,9 @@
 
 // 赛道生成
 #define NUM_SEGMENTS      800      // 赛道总段数
-#define TRACK_WIDTH        3.0     // 赛道半宽 (实际宽度为 2*TRACK_WIDTH)
+#define TRACK_WIDTH        6.0     // 赛道半宽 (实际宽度为 2*TRACK_WIDTH)
 #define SEGMENT_STEP        2.0     // 每段前进距离
-#define HEIGHT_VARIATION    0.4     // 高度变化幅度 (±0.2)
+#define HEIGHT_VARIATION    1     // 高度变化幅度 (±0.2)
 #define TURN_VARIATION      0.1     // 方向变化幅度 (±0.1 rad)
 
 // 投影矩阵（视锥体）
