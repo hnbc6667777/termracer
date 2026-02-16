@@ -15,12 +15,13 @@
 #define FRICTION            1.2     // 摩擦减速度 (m/s²)
 #define KEY_HOLD_TIME       0.1     // 转向键保持判定时间 (秒)
 
-// 赛道生成
-#define NUM_SEGMENTS      800      // 赛道总段数
+// 赛道生成（环形）
+#define NUM_SEGMENTS      800      // 赛道点数（同时也是线段数，形成闭环）
 #define TRACK_WIDTH        6.0     // 赛道半宽 (实际宽度为 2*TRACK_WIDTH)
-#define SEGMENT_STEP        2.0     // 每段前进距离
-#define HEIGHT_VARIATION    1     // 高度变化幅度 (±0.2)
-#define TURN_VARIATION      1     // 方向变化幅度 (±0.1 rad)
+#define TRACK_RADIUS_MAJOR 25.0    // 椭圆长半轴
+#define TRACK_RADIUS_MINOR 18.0    // 椭圆短半轴
+#define RADIAL_NOISE       3.0     // 径向随机扰动幅度
+#define HEIGHT_NOISE       0.8     // 高度随机变化幅度
 
 // 投影矩阵（视锥体）
 #define FRUSTUM_L_FACTOR    0.4     // left = -aspect * FRUSTUM_L_FACTOR
@@ -95,22 +96,46 @@ Matrix look_at_matrix(Vec3 eye, Vec3 target, Vec3 up) {
     return mat;
 }
 
-// ==================== 赛道生成 ====================
-TrackSegment* generate_track(int num_segments, double track_width) {
-    TrackSegment* track = malloc(num_segments * sizeof(TrackSegment));
-    double z = 0, y = 0, x = 0, angle = 0;
-    for (int i = 0; i < num_segments; i++) {
-        if (i % 10 == 0) angle += ((rand() % 200) - 100) / 1000.0 * TURN_VARIATION * 10; // 随机转向
-        y += ((rand() % 200) - 100) / 500.0 * HEIGHT_VARIATION; // 高度变化
-        if (y < -1) y = -1; if (y > 1) y = 1;
-        x += SEGMENT_STEP * sin(angle);
-        z += SEGMENT_STEP * cos(angle);
-        track[i].center = (Vec3){x, y, z};
-        Vec3 dir = {sin(angle), 0, cos(angle)};
-        Vec3 left_dir = {cos(angle), 0, -sin(angle)};
-        track[i].left  = (Vec3){x + left_dir.x * track_width, y, z + left_dir.z * track_width};
-        track[i].right = (Vec3){x - left_dir.x * track_width, y, z - left_dir.z * track_width};
+// ==================== 环形赛道生成 ====================
+TrackSegment* generate_closed_track(int num_points, double track_width) {
+    TrackSegment* track = malloc(num_points * sizeof(TrackSegment));
+    Vec3* centers = malloc(num_points * sizeof(Vec3));
+
+    // 生成中心点（椭圆 + 随机扰动）
+    for (int i = 0; i < num_points; i++) {
+        double angle = 2.0 * M_PI * i / num_points; // 0 ~ 2π
+        // 基础椭圆
+        double x0 = TRACK_RADIUS_MAJOR * cos(angle);
+        double z0 = TRACK_RADIUS_MINOR * sin(angle);
+        // 径向扰动（沿从原点出发的方向）
+        double noise = ((rand() % 2000) - 1000) / 1000.0 * RADIAL_NOISE;
+        double len = sqrt(x0*x0 + z0*z0);
+        if (len > 1e-6) {
+            x0 += noise * x0 / len;
+            z0 += noise * z0 / len;
+        }
+        // 高度扰动
+        double y0 = ((rand() % 2000) - 1000) / 1000.0 * HEIGHT_NOISE;
+        centers[i] = (Vec3){x0, y0, z0};
     }
+
+    // 计算每个点的切线方向（使用前后点差分，水平方向）
+    for (int i = 0; i < num_points; i++) {
+        int prev = (i - 1 + num_points) % num_points;
+        int next = (i + 1) % num_points;
+        Vec3 dir = vec3_sub(centers[next], centers[prev]);
+        // 忽略Y分量，只取水平方向
+        dir.y = 0;
+        dir = vec3_normalize(dir);
+        // 左法线（水平面内旋转90度）
+        Vec3 left_dir = {dir.z, 0, -dir.x};
+
+        track[i].center = centers[i];
+        track[i].left = vec3_add(centers[i], vec3_scale(left_dir, track_width));
+        track[i].right = vec3_sub(centers[i], vec3_scale(left_dir, track_width));
+    }
+
+    free(centers);
     return track;
 }
 
@@ -147,11 +172,25 @@ double get_time() {
     return tv.tv_sec + tv.tv_usec / 1000000.0;
 }
 
+// 寻找最近的赛道中心点索引（用于高度跟随）
+int find_nearest_segment(Vec3 pos, TrackSegment* track, int num_points) {
+    int best = 0;
+    double best_dist = vec3_dot(vec3_sub(pos, track[0].center), vec3_sub(pos, track[0].center));
+    for (int i = 1; i < num_points; i++) {
+        double d = vec3_dot(vec3_sub(pos, track[i].center), vec3_sub(pos, track[i].center));
+        if (d < best_dist) {
+            best_dist = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
 int main() {
     initscr(); cbreak(); noecho(); keypad(stdscr, TRUE); nodelay(stdscr, TRUE); curs_set(0);
     srand(time(NULL));
 
-    TrackSegment* track = generate_track(NUM_SEGMENTS, TRACK_WIDTH);
+    TrackSegment* track = generate_closed_track(NUM_SEGMENTS, TRACK_WIDTH);
 
     int max_y, max_x;
     getmaxyx(stdscr, max_y, max_x);
@@ -159,7 +198,9 @@ int main() {
     Frustum frust = { -aspect * FRUSTUM_L_FACTOR, aspect * FRUSTUM_R_FACTOR, FRUSTUM_B, FRUSTUM_T, FRUSTUM_N, FRUSTUM_F };
     Matrix proj = projection_matrix(&frust);
 
-    Car car = { {0, 0.5, 0}, 0, 0 };
+    // 将赛车放在第一个赛道点上，并稍微抬高
+    Car car = { track[0].center, 0, 0 };
+    car.position.y += 0.3;
 
     int accel_fwd_on = 0;
     int accel_bwd_on = 0;
@@ -222,9 +263,10 @@ int main() {
         // 更新位置
         car.position.x += car.speed * delta_time * sin(car.yaw);
         car.position.z += car.speed * delta_time * cos(car.yaw);
-        int nearest = (int)(car.position.z / SEGMENT_STEP);
-        if (nearest >= 0 && nearest < NUM_SEGMENTS)
-            car.position.y = track[nearest].center.y + 0.3;
+
+        // 高度跟随（找到最近的赛道中心点）
+        int nearest = find_nearest_segment(car.position, track, NUM_SEGMENTS);
+        car.position.y = track[nearest].center.y + 0.3;
 
         // 相机
         Vec3 eye = { car.position.x - CAMERA_DIST * sin(car.yaw), car.position.y + CAMERA_HEIGHT, car.position.z - CAMERA_DIST * cos(car.yaw) };
@@ -235,12 +277,15 @@ int main() {
 
         erase();
 
-        // 绘制赛道
-        for (int i = 1; i < NUM_SEGMENTS; i++) {
-            draw_line(&track[i-1].center, &track[i].center, &vp, '.');
-            draw_line(&track[i-1].left, &track[i].left, &vp, '#');
-            draw_line(&track[i-1].right, &track[i].right, &vp, '#');
-            if (i % 5 == 0) draw_line(&track[i].left, &track[i].right, &vp, '-');
+        // 绘制赛道（所有相邻线段，包括最后一段回到起点）
+        for (int i = 0; i < NUM_SEGMENTS; i++) {
+            int j = (i + 1) % NUM_SEGMENTS; // 形成闭环
+            draw_line(&track[i].center, &track[j].center, &vp, '.');
+            draw_line(&track[i].left, &track[j].left, &vp, '#');
+            draw_line(&track[i].right, &track[j].right, &vp, '#');
+            // 每隔5段画一条连接左右边界的横线（在当前点）
+            if (i % 5 == 0)
+                draw_line(&track[i].left, &track[i].right, &vp, '-');
         }
 
         int sx, sy;
